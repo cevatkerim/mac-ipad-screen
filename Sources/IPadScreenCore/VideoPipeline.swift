@@ -11,10 +11,16 @@ public struct SessionStatistics: Codable {
     public var receiver: ReceiverAck?
     public var elapsedSeconds = 0.0
     public var hardwareEncoder = false
+    public var lowLatencyEncoder = false
+    public var encoderID = ""
     public var width = 0
     public var height = 0
     public var mode = ""
     public var requestedFPS = 30
+    public var averageEncodeMilliseconds = 0.0
+    public var averageUSBMilliseconds = 0.0
+    public var maximumEncodeMilliseconds = 0.0
+    public var maximumUSBMilliseconds = 0.0
     public var averageFPS: Double { Double(framesSent) / max(0.001, elapsedSeconds) }
     public init() {}
 }
@@ -38,25 +44,41 @@ final class VideoPipeline: NSObject, SCStreamOutput, @unchecked Sendable {
     private var forceKeyframe = true
     private var started = ProcessInfo.processInfo.systemUptime
     private var lastReport = 0.0
+    private var totalEncodeMilliseconds = 0.0
+    private var totalUSBMilliseconds = 0.0
     private let fps: Int
     private var statistics: SessionStatistics
     private let report: (SessionStatistics) -> Void
     private let failure: (Error) -> Void
 
-    init(socket: LocalSocket, width: Int, height: Int, fps: Int, bitrate: Int, mode: String,
+    init(socket: LocalSocket, width: Int, height: Int, fps: Int, bitrate: Int, mode: String, encoderMode: EncoderMode = .hardware,
          report: @escaping (SessionStatistics) -> Void, failure: @escaping (Error) -> Void) throws {
         self.socket = socket; self.fps = fps; self.report = report; self.failure = failure
         statistics = SessionStatistics()
         statistics.width = width; statistics.height = height; statistics.mode = mode; statistics.requestedFPS = fps
         super.init()
-        let specification = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true] as CFDictionary
-        try check(VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: Int32(width), height: Int32(height),
-            codecType: kCMVideoCodecType_H264, encoderSpecification: specification,
+        let specification: [CFString: Bool] = encoderMode == .hardware
+            ? [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
+            : [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
+               kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
+        statistics.lowLatencyEncoder = encoderMode == .lowLatency
+        let created = VTCompressionSessionCreate(allocator: kCFAllocatorDefault, width: Int32(width), height: Int32(height),
+            codecType: kCMVideoCodecType_H264, encoderSpecification: specification as CFDictionary,
             imageBufferAttributes: nil, compressedDataAllocator: nil, outputCallback: nil,
-            refcon: nil, compressionSessionOut: &encoder), "create H.264 encoder")
+            refcon: nil, compressionSessionOut: &encoder)
+        guard created == noErr else {
+            if let encoder { VTCompressionSessionInvalidate(encoder) }; encoder = nil
+            throw HostError("The selected H.264 encoder is unavailable (\(created)). Try the other encoder option.")
+        }
         do {
             try property(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
             try property(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
+            let speedStatus = VTSessionSetProperty(encoder!, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+                value: fps == 60 ? kCFBooleanTrue : kCFBooleanFalse)
+            if speedStatus != kVTPropertyNotSupportedErr { try check(speedStatus, "configure encoder speed") }
+            // Optional on older encoders. Forced IDRs below remain the recovery mechanism.
+            let delayStatus = VTSessionSetProperty(encoder!, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
+            if delayStatus != kVTPropertyNotSupportedErr { try check(delayStatus, "disable encoder buffering") }
             try property(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel)
             try property(kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
             try property(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
@@ -69,6 +91,9 @@ final class VideoPipeline: NSObject, SCStreamOutput, @unchecked Sendable {
             var hardware: Unmanaged<CFTypeRef>?
             VTSessionCopyProperty(encoder!, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, allocator: nil, valueOut: &hardware)
             statistics.hardwareEncoder = (hardware?.takeRetainedValue() as? NSNumber)?.boolValue ?? false
+            var encoderID: Unmanaged<CFTypeRef>?
+            VTSessionCopyProperty(encoder!, key: kVTCompressionPropertyKey_EncoderID, allocator: nil, valueOut: &encoderID)
+            statistics.encoderID = (encoderID?.takeRetainedValue() as? String) ?? "unknown"
         } catch { VTCompressionSessionInvalidate(encoder!); encoder = nil; throw error }
     }
     private func check(_ status: OSStatus, _ operation: String) throws {
@@ -161,13 +186,16 @@ final class VideoPipeline: NSObject, SCStreamOutput, @unchecked Sendable {
         return data
     }
     private func send(_ sample: CMSampleBuffer) throws {
+        let encodeMilliseconds = (ProcessInfo.processInfo.systemUptime - lastSubmitted) * 1000
         let payload = try Self.avcc(sample)
         let packet = try ReceiverProtocol.packet(payload)
         wireQueue.async { [weak self] in
             guard let self else { return }
             do {
+                let sentAt = ProcessInfo.processInfo.systemUptime
                 try self.socket.writeAll(packet)
                 let ack = try ReceiverAck(data: self.socket.readExactly(16))
+                let usbMilliseconds = (ProcessInfo.processInfo.systemUptime - sentAt) * 1000
                 self.queue.async {
                     guard !self.stopped else { return }
                     let previous = self.statistics.receiver
@@ -176,6 +204,11 @@ final class VideoPipeline: NSObject, SCStreamOutput, @unchecked Sendable {
                         self.fail(HostError("The companion returned inconsistent frame counters.")); return
                     }
                     self.statistics.framesSent += 1; self.statistics.bytesSent += payload.count
+                    self.totalEncodeMilliseconds += encodeMilliseconds; self.totalUSBMilliseconds += usbMilliseconds
+                    self.statistics.averageEncodeMilliseconds = self.totalEncodeMilliseconds / Double(self.statistics.framesSent)
+                    self.statistics.averageUSBMilliseconds = self.totalUSBMilliseconds / Double(self.statistics.framesSent)
+                    self.statistics.maximumEncodeMilliseconds = max(self.statistics.maximumEncodeMilliseconds, encodeMilliseconds)
+                    self.statistics.maximumUSBMilliseconds = max(self.statistics.maximumUSBMilliseconds, usbMilliseconds)
                     self.statistics.receiver = ack
                     self.statistics.elapsedSeconds = ProcessInfo.processInfo.systemUptime - self.started
                     self.busy = false

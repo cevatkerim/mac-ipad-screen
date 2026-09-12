@@ -3,6 +3,12 @@ import ScreenCaptureKit
 import VirtualDisplay
 
 public enum DisplayMode: String, CaseIterable { case extend, mirror, test }
+public enum EncoderMode: String, CaseIterable, Identifiable {
+    case hardware
+    case lowLatency = "low-latency"
+    public var id: String { rawValue }
+    public var label: String { self == .hardware ? "Hardware · lower CPU" : "Low latency · higher CPU" }
+}
 
 public struct SessionOptions {
     public var mode: DisplayMode = .extend
@@ -10,6 +16,7 @@ public struct SessionOptions {
     public var fps = 30
     public var bitrate = 28_000_000
     public var retina = true
+    public var encoderMode: EncoderMode = .hardware
     public init() {}
 }
 
@@ -41,10 +48,19 @@ public struct SessionOptions {
         do {
             lockFile = open(store.root.appendingPathComponent("screen.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
             guard lockFile >= 0, flock(lockFile, LOCK_EX | LOCK_NB) == 0 else { throw HostError("Another iPad Screen session is running. Stop it first.") }
-            if options.mode != .test && !CGPreflightScreenCaptureAccess() {
-                CGRequestScreenCaptureAccess()
-                throw HostError("Allow iPad Screen in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen this app.")
+            if options.mode != .test {
+                do {
+                    // Ask the API we actually capture with. CoreGraphics preflight can
+                    // disagree with ScreenCaptureKit and must not veto an authorized stream.
+                    _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                } catch {
+                    if (error as NSError).code == -3801 {
+                        throw HostError("Screen Recording is unavailable for this copy of iPad Screen. Enable it in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen. If it is already enabled after a rebuild, remove its old entry and add this app again.")
+                    }
+                    throw error
+                }
             }
+            guard active, !Task.isCancelled else { throw CancellationError() }
             let token = try store.token(for: profile)
             let connection = try await Task.detached { [store] in
                 // A manually foregrounded companion can stream even if SSH launch is unavailable.
@@ -58,7 +74,7 @@ public struct SessionOptions {
             guard active else { connection.cancel(); throw CancellationError() }
             let width = profile.model.width, height = profile.model.height
             let pipeline = try VideoPipeline(socket: connection, width: width, height: height, fps: options.fps,
-                bitrate: options.bitrate, mode: options.mode.rawValue,
+                bitrate: options.bitrate, mode: options.mode.rawValue, encoderMode: options.encoderMode,
                 report: { [weak self] value in Task { @MainActor in self?.report(value) } },
                 failure: { [weak self] error in Task { @MainActor in await self?.failed(error) } })
             self.pipeline = pipeline

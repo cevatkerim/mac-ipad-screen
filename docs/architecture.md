@@ -27,8 +27,11 @@ After the receiver acknowledges a frame, encoding of the latest pending image
 starts immediately. Discarding superseded raw buffers preserves the encoded
 reference chain; discarding arbitrary encoded P frames would break it.
 
-VideoToolbox requests hardware H.264, real-time encoding, no B frames, and an IDR
-at least once a second. Hardware use is queried and reported, not assumed.
+The hardware option requires hardware H.264. The low-latency option selects
+Apple's real-time rate-control encoder (software on the tested Mac). Both use
+real-time encoding, no B frames, no internal frame delay where supported, and an
+IDR at least once a second. At 60 fps the speed-priority hint is enabled. Actual
+hardware use and encoder identity are queried and reported, not assumed.
 The encoder's AVCC samples are prefixed with SPS/PPS at every IDR. A receiver
 enqueue stall forces another IDR, allowing it to recover from a flushed queue.
 
@@ -79,5 +82,6 @@ display, with session-scoped configuration.
 - [Apple: Capturing screen content in macOS](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos)
 - [Apple: SCStreamConfiguration](https://developer.apple.com/documentation/screencapturekit/scstreamconfiguration)
 - [Apple: VideoToolbox](https://developer.apple.com/documentation/videotoolbox)
+- [Apple: Low-latency VideoToolbox encoding](https://developer.apple.com/videos/play/wwdc2021/10158/)
 - [Chromium: virtual display API declarations and HiDPI behavior](https://chromium.googlesource.com/chromium/src/+/HEAD/ui/display/mac/test/virtual_display_util_mac.mm)
 - [Original companion and shared protocol](https://github.com/cevatkerim/ipad-screen)

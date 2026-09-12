@@ -12,6 +12,7 @@ import IPadScreenCore
     @Published var fps = 30
     @Published var retina = true
     @Published var bitrate = 28
+    @Published var encoderMode: EncoderMode = .hardware
     @Published var status = "Connect your iPad with a USB cable."
     @Published var error: String?
     @Published var busy = false
@@ -84,6 +85,7 @@ import IPadScreenCore
                 self.session = session
                 var options = SessionOptions(); options.mode = mode; options.displayID = displayID
                 options.fps = fps; options.bitrate = bitrate * 1_000_000; options.retina = retina
+                options.encoderMode = encoderMode
                 try await session.start(profile: profile, options: options)
                 running = true
                 status = mode == .extend ? "Your iPad is a second display. Move a window to the right." : mode == .mirror ? "Your Mac display is mirrored to the iPad." : "A moving test pattern is streaming to the iPad."
@@ -109,7 +111,7 @@ struct IPadScreenApp: App {
         Window("iPad Screen", id: "main") {
             HostView(model: model)
         }
-        .defaultSize(width: 580, height: 690)
+        .defaultSize(width: 580, height: 740)
         .windowResizability(.contentSize)
         MenuBarExtra("iPad Screen", systemImage: model.running ? "display.2" : "ipad.landscape") {
             MenuControls(model: model)
@@ -195,6 +197,9 @@ struct HostView: View {
                         Spacer()
                         Toggle("Retina extension", isOn: $model.retina)
                     }
+                    Picker("Encoder", selection: $model.encoderMode) {
+                        ForEach(EncoderMode.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
                     HStack {
                         Text("Quality").frame(width: 80, alignment: .leading)
                         Slider(value: Binding(get: { Double(model.bitrate) }, set: { model.bitrate = Int($0) }), in: 8...60, step: 2)
@@ -216,6 +221,10 @@ struct HostView: View {
                         Text(String(format: "%.1f fps avg", model.statistics.averageFPS))
                         Text("\(model.statistics.receiver?.errors ?? 0) errors")
                     }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(String(format: "%@ · encode %.1f ms · USB + ack %.1f ms",
+                        model.statistics.hardwareEncoder ? "Hardware H.264" : "Software H.264",
+                        model.statistics.averageEncodeMilliseconds, model.statistics.averageUSBMilliseconds))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = model.error {
                     Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)

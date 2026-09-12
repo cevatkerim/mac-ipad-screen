@@ -20,6 +20,9 @@ open 'build/iPad Screen.app'
 The build produces an app for the current Mac architecture, with a local ad-hoc
 signature. To sign with an existing signing identity, set `CODESIGN_IDENTITY`
 when building. Distribution signing and notarization are not configured.
+Rebuilding an ad-hoc app changes its signing identity. If Screen Recording is
+denied even though its switch is on, remove the old iPad Screen entry from that
+settings list, add the newly built app, then quit and reopen it.
 
 ## Connect your iPad
 
@@ -58,6 +61,15 @@ listed models, Intel Macs, and older supported macOS releases need hardware
 validation. Start at 30 fps. The 60 fps option is a request, not a performance
 guarantee. H.264 4:2:0 can soften colored text.
 
+Choose **Low latency · higher CPU** together with **60 fps** for the faster path.
+On the tested Mac and Pro 9.7, desktop mirroring delivered roughly 55–58 fps with
+this setting, versus about 39 fps with the hardware encoder at 60 fps requested.
+Both runs had zero reported rendering errors. Low latency selects Apple's
+real-time encoder, which reports software encoding on this Mac. The default
+hardware option favors lower CPU use. At 60 fps the encoder is asked to favor
+speed over quality at the selected bitrate. The status panel shows the actual
+encoder type and average encode / USB acknowledgment times.
+
 ## Local state and security
 
 Pairing adds a dedicated Mac SSH public key while preserving existing authorized
@@ -95,6 +107,7 @@ APP='build/iPad Screen.app/Contents/MacOS/IPadScreenMac'
 "$APP" --run test --seconds 15
 "$APP" --run mirror --seconds 30
 "$APP" --run extend --seconds 30
+"$APP" --run mirror --fps 60 --encoder low-latency --seconds 30
 "$APP" --check-virtual
 "$APP" --help
 ```

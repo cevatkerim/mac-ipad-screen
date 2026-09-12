@@ -49,6 +49,7 @@ if let secret = ProcessInfo.processInfo.environment["IPAD_SCREEN_ASKPASS_FILE"] 
       --seconds N                     Stop after N seconds (default: until Ctrl+C)
       --fps 30|60                     Requested frame rate (default: 30)
       --bitrate-mbps N                4–80 Mbps (default: 28)
+      --encoder hardware|low-latency  Hardware saves CPU; low latency favors speed
       --display-id N                  Existing Mac display to mirror
       --standard-scale               Use 1× instead of Retina in extend mode
     --check-virtual                    Create/remove a temporary display and verify cleanup
@@ -122,6 +123,10 @@ if let secret = ProcessInfo.processInfo.environment["IPAD_SCREEN_ASKPASS_FILE"] 
     guard let modeString = option("--run"), let mode = DisplayMode(rawValue: modeString) else { throw HostError("Use --run extend, mirror, or test.") }
     guard let profile = try store.activeProfile() else { throw HostError("Pair your iPad using the graphical app first.") }
     var options = SessionOptions(); options.mode = mode
+    if let value = option("--encoder") {
+        guard let encoder = EncoderMode(rawValue: value) else { throw HostError("Use --encoder hardware or low-latency.") }
+        options.encoderMode = encoder
+    }
     if let value = option("--fps") { guard let fps = Int(value), [30,60].contains(fps) else { throw HostError("Use --fps 30 or 60.") }; options.fps = fps }
     if let value = option("--bitrate-mbps") { guard let rate = Int(value), (4...80).contains(rate) else { throw HostError("Use a bitrate from 4 to 80 Mbps.") }; options.bitrate = rate * 1_000_000 }
     if let value = option("--display-id") { guard let id = UInt32(value) else { throw HostError("Invalid display ID.") }; options.displayID = id }
@@ -131,7 +136,7 @@ if let secret = ProcessInfo.processInfo.environment["IPAD_SCREEN_ASKPASS_FILE"] 
     var lastPrint = -5.0
     let session = DisplaySession(store: store, report: { stats in
         if stats.elapsedSeconds - lastPrint >= 5 {
-            print("Sent/enqueued: \(stats.framesSent)/\(stats.receiver?.enqueued ?? 0); renderer errors: \(stats.receiver?.errors ?? 0); hardware H.264: \(stats.hardwareEncoder)")
+            print("Sent/enqueued: \(stats.framesSent)/\(stats.receiver?.enqueued ?? 0); renderer errors: \(stats.receiver?.errors ?? 0); hardware H.264: \(stats.hardwareEncoder); encode/USB+ack: " + String(format: "%.1f/%.1f ms", stats.averageEncodeMilliseconds, stats.averageUSBMilliseconds))
             fflush(stdout); lastPrint = stats.elapsedSeconds
         }
     }, failure: { errorSeen = $0 })

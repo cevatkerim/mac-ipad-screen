@@ -10,5 +10,6 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>iPad Screen captures the selected Mac display and streams it over USB to your iPad.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
