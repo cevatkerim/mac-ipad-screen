@@ -62,6 +62,10 @@ moving-pattern runs delivered 1132–1159 frames in roughly 20.7 seconds with no
 errors. Apple's `com.apple.videotoolbox.videoencoder.h264.rtvc` reports software
 encoding here; the hardware choice uses `com.apple.videotoolbox.videoencoder.ave.avc`.
 The UI exposes both choices and reports the actual hardware/software result.
+The final graphical Mirror control streamed and enqueued 2629 frames in 46.69
+seconds (56.3 fps), with 10.5 ms average encoding, 4.6 ms USB plus acknowledgment,
+and zero rendering errors. Its Stop control disconnected cleanly; reconnecting
+through Extend at 60 fps with the low-latency encoder also succeeded.
 
 The original bottleneck was encoder turnaround in the serialized encode/send/ack
 cycle. The final software path fits most cycles near the 16.7 ms budget for
